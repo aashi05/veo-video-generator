@@ -461,15 +461,23 @@ async def check_status(operation: str):
     """Check the status of a video generation operation."""
     if not operation:
         raise HTTPException(status_code=400, detail="Operation ID required")
-    
+
     if not GEMINI_API_KEY:
         logger.error("GEMINI_API_KEY not configured")
         raise HTTPException(status_code=500, detail="Server configuration error")
-    
+
     try:
+        logger.info(f"Checking status for operation: {operation}")
         client = genai.Client(api_key=GEMINI_API_KEY)
-        op = client.operations.get(operation)
-        
+
+        # Try to get the operation status
+        try:
+            op = client.operations.get(operation)
+        except Exception as get_error:
+            logger.error(f"Failed to get operation: {str(get_error)}")
+            # Return processing status instead of failing
+            return {"status": "processing"}
+
         if op.done:
             if op.error:
                 error_msg = op.error.message if hasattr(op.error, 'message') else str(op.error)
@@ -482,13 +490,15 @@ async def check_status(operation: str):
                 logger.info(f"Operation completed: {operation}")
                 return {"status": "completed"}
         else:
+            logger.info(f"Operation still processing: {operation}")
             return {"status": "processing"}
-    
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Status check error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to check status")
+        # Return processing instead of 500 error to avoid breaking polling
+        return {"status": "processing"}
 
 
 @app.get("/video")
