@@ -2,7 +2,7 @@ import os
 import logging
 from typing import Optional
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 import google.genai as genai
 from google.genai import types
@@ -52,9 +52,6 @@ if not GEMINI_API_KEY:
 
 app = FastAPI()
 
-# In-memory storage for operations during user session
-operations_store: dict = {}
-
 
 def validate_configuration() -> tuple[bool, Optional[str]]:
     """Validate video configuration combinations."""
@@ -62,23 +59,23 @@ def validate_configuration() -> tuple[bool, Optional[str]]:
     if VIDEO_RESOLUTION in ["1080p", "4k"]:
         if VIDEO_DURATION_SECONDS != 8:
             return False, f"{VIDEO_RESOLUTION} requires VIDEO_DURATION_SECONDS = 8"
-
+    
     # Validate duration
     if VIDEO_DURATION_SECONDS not in [4, 6, 8]:
         return False, f"VIDEO_DURATION_SECONDS must be 4, 6, or 8, got {VIDEO_DURATION_SECONDS}"
-
+    
     # Validate resolution
     if VIDEO_RESOLUTION not in ["720p", "1080p", "4k"]:
         return False, f"VIDEO_RESOLUTION must be 720p, 1080p, or 4k"
-
+    
     # Validate aspect ratio
     if VIDEO_ASPECT_RATIO not in ["16:9", "9:16"]:
         return False, f"VIDEO_ASPECT_RATIO must be 16:9 or 9:16"
-
+    
     # Validate number of videos
     if NUMBER_OF_VIDEOS != 1:
         return False, "NUMBER_OF_VIDEOS must be 1"
-
+    
     return True, None
 
 
@@ -108,7 +105,7 @@ async def get_homepage():
                 padding: 0;
                 box-sizing: border-box;
             }}
-
+            
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -118,7 +115,7 @@ async def get_homepage():
                 align-items: center;
                 padding: 20px;
             }}
-
+            
             .container {{
                 background: white;
                 border-radius: 12px;
@@ -127,25 +124,25 @@ async def get_homepage():
                 width: 100%;
                 padding: 40px;
             }}
-
+            
             h1 {{
                 text-align: center;
                 color: #333;
                 margin-bottom: 30px;
                 font-size: 28px;
             }}
-
+            
             .form-group {{
                 margin-bottom: 20px;
             }}
-
+            
             label {{
                 display: block;
                 margin-bottom: 8px;
                 color: #555;
                 font-weight: 500;
             }}
-
+            
             textarea {{
                 width: 100%;
                 padding: 12px;
@@ -157,18 +154,18 @@ async def get_homepage():
                 min-height: 120px;
                 transition: border-color 0.3s;
             }}
-
+            
             textarea:focus {{
                 outline: none;
                 border-color: #667eea;
             }}
-
+            
             .button-group {{
                 display: flex;
                 gap: 10px;
                 margin-top: 20px;
             }}
-
+            
             button {{
                 flex: 1;
                 padding: 12px 24px;
@@ -181,17 +178,17 @@ async def get_homepage():
                 cursor: pointer;
                 transition: transform 0.2s, box-shadow 0.2s;
             }}
-
+            
             button:hover:not(:disabled) {{
                 transform: translateY(-2px);
                 box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
             }}
-
+            
             button:disabled {{
                 opacity: 0.6;
                 cursor: not-allowed;
             }}
-
+            
             .status-area {{
                 margin-top: 30px;
                 padding: 16px;
@@ -202,23 +199,23 @@ async def get_homepage():
                 font-size: 14px;
                 min-height: 20px;
             }}
-
+            
             .video-container {{
                 margin-top: 30px;
                 display: none;
             }}
-
+            
             .video-container.visible {{
                 display: block;
             }}
-
+            
             video {{
                 width: 100%;
                 border-radius: 8px;
                 background: #000;
                 margin-bottom: 15px;
             }}
-
+            
             .download-link {{
                 display: inline-block;
                 padding: 12px 24px;
@@ -229,42 +226,31 @@ async def get_homepage():
                 font-weight: 600;
                 transition: background 0.3s;
             }}
-
+            
             .download-link:hover {{
                 background: #45a049;
             }}
-
+            
             .error {{
                 color: #d32f2f;
-            }}
-
-            .attempts-info {{
-                margin-top: 15px;
-                padding: 10px;
-                background: #fff3cd;
-                border-radius: 6px;
-                color: #856404;
-                font-size: 13px;
             }}
         </style>
     </head>
     <body>
         <div class="container">
             <h1>{APPLICATION_NAME}</h1>
-
+            
             <div class="form-group">
                 <label for="prompt">Describe the video you want to generate...</label>
                 <textarea id="prompt" placeholder="A cinematic drone shot over a mountain lake at sunrise..."></textarea>
             </div>
-
+            
             <div class="button-group">
                 <button id="generateBtn" onclick="generateVideo()">Generate Video</button>
             </div>
-
+            
             <div class="status-area" id="status">Ready</div>
-
-            <div class="attempts-info" id="attemptsInfo" style="display: none;"></div>
-
+            
             <div class="video-container" id="videoContainer">
                 <video id="videoPlayer" controls></video>
                 <div style="text-align: center;">
@@ -272,14 +258,14 @@ async def get_homepage():
                 </div>
             </div>
         </div>
-
+        
         <script>
             const STATUS_POLL_INTERVAL = {STATUS_POLL_INTERVAL_SECONDS} * 1000;
             const MAX_PROMPT_LENGTH = {MAX_PROMPT_LENGTH};
-
+            
             let currentOperationId = null;
             let isPolling = false;
-
+            
             // Try to resume from localStorage on page load
             function resumeIfNeeded() {{
                 const savedOperation = localStorage.getItem('currentOperation');
@@ -290,40 +276,40 @@ async def get_homepage():
                     pollStatus();
                 }}
             }}
-
+            
             window.addEventListener('load', resumeIfNeeded);
-
+            
             async function generateVideo() {{
                 const prompt = document.getElementById('prompt').value.trim();
-
+                
                 if (!prompt) {{
                     updateStatus('Please enter a prompt.', 'error');
                     return;
                 }}
-
+                
                 if (prompt.length > MAX_PROMPT_LENGTH) {{
                     updateStatus(`Prompt exceeds maximum allowed length ({{prompt.length}}/{MAX_PROMPT_LENGTH}).`, 'error');
                     return;
                 }}
-
+                
                 const generateBtn = document.getElementById('generateBtn');
                 generateBtn.disabled = true;
                 updateStatus('Starting video generation...');
-
+                
                 try {{
                     const response = await fetch('/generate', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
                         body: JSON.stringify({{prompt}})
                     }});
-
+                    
                     if (!response.ok) {{
                         const error = await response.json();
                         updateStatus(`Error: {{error.detail || 'Generation failed'}}`, 'error');
                         generateBtn.disabled = false;
                         return;
                     }}
-
+                    
                     const data = await response.json();
                     currentOperationId = data.operation;
                     localStorage.setItem('currentOperation', currentOperationId);
@@ -334,24 +320,24 @@ async def get_homepage():
                     generateBtn.disabled = false;
                 }}
             }}
-
+            
             async function pollStatus() {{
                 if (isPolling || !currentOperationId) return;
-
+                
                 isPolling = true;
-
+                
                 try {{
                     const response = await fetch(`/status?operation=${{currentOperationId}}`);
-
+                    
                     if (!response.ok) {{
                         updateStatus('Temporary status error. Retrying...', 'error');
                         isPolling = false;
                         setTimeout(pollStatus, STATUS_POLL_INTERVAL);
                         return;
                     }}
-
+                    
                     const data = await response.json();
-
+                    
                     if (data.status === 'processing') {{
                         updateStatus('Generating video...');
                         isPolling = false;
@@ -373,21 +359,21 @@ async def get_homepage():
                     setTimeout(pollStatus, STATUS_POLL_INTERVAL);
                 }}
             }}
-
+            
             async function loadVideo() {{
                 try {{
                     const videoUrl = `/video?operation=${{currentOperationId}}`;
                     const videoPlayer = document.getElementById('videoPlayer');
                     videoPlayer.src = videoUrl;
-
+                    
                     const videoContainer = document.getElementById('videoContainer');
                     videoContainer.classList.add('visible');
-
+                    
                     const downloadLink = document.getElementById('downloadLink');
                     downloadLink.href = videoUrl;
-
+                    
                     localStorage.removeItem('currentOperation');
-
+                    
                     // Allow new generation
                     document.getElementById('generateBtn').disabled = false;
                     currentOperationId = null;
@@ -396,7 +382,7 @@ async def get_homepage():
                     document.getElementById('generateBtn').disabled = false;
                 }}
             }}
-
+            
             function updateStatus(message, type = 'info') {{
                 const statusDiv = document.getElementById('status');
                 statusDiv.textContent = message;
@@ -418,30 +404,30 @@ async def generate_video(request: GenerateRequest):
     if not GEMINI_API_KEY:
         logger.error("GEMINI_API_KEY not configured")
         raise HTTPException(status_code=500, detail="Server configuration error")
-
+    
     prompt = request.prompt.strip()
-
+    
     # Validate prompt
     if not prompt:
         raise HTTPException(status_code=400, detail="Please enter a prompt.")
-
+    
     if len(prompt) > MAX_PROMPT_LENGTH:
         raise HTTPException(
             status_code=400,
             detail=f"Prompt exceeds maximum allowed length ({len(prompt)}/{MAX_PROMPT_LENGTH})."
         )
-
+    
     # Validate configuration
     is_valid, error_msg = validate_configuration()
     if not is_valid:
         logger.error(f"Configuration error: {error_msg}")
         raise HTTPException(status_code=500, detail="Server configuration error")
-
+    
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
-
+        
         logger.info(f"Starting video generation with prompt: {prompt[:50]}...")
-
+        
         operation = client.models.generate_videos(
             model=VIDEO_MODEL,
             prompt=prompt,
@@ -452,21 +438,16 @@ async def generate_video(request: GenerateRequest):
                 number_of_videos=NUMBER_OF_VIDEOS,
             ),
         )
-
+        
         operation_id = operation.name
-        operations_store[operation_id] = {
-            "operation": operation,
-            "prompt": prompt,
-            "status": "processing"
-        }
-
+        
         logger.info(f"Generation started: {operation_id}")
-
+        
         return {
             "status": "processing",
             "operation": operation_id
         }
-
+    
     except Exception as e:
         logger.error(f"Generation error: {str(e)}")
         raise HTTPException(
@@ -480,17 +461,17 @@ async def check_status(operation: str):
     """Check the status of a video generation operation."""
     if not operation:
         raise HTTPException(status_code=400, detail="Operation ID required")
-
+    
+    if not GEMINI_API_KEY:
+        logger.error("GEMINI_API_KEY not configured")
+        raise HTTPException(status_code=500, detail="Server configuration error")
+    
     try:
-        if operation not in operations_store:
-            raise HTTPException(status_code=404, detail="Operation not found")
-
-        stored = operations_store[operation]
-        op = stored["operation"]
-
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        op = client.operations.get(operation)
+        
         if op.done:
             if op.error:
-                stored["status"] = "failed"
                 error_msg = op.error.message if hasattr(op.error, 'message') else str(op.error)
                 logger.error(f"Operation failed: {error_msg}")
                 return {
@@ -498,12 +479,11 @@ async def check_status(operation: str):
                     "error": error_msg
                 }
             else:
-                stored["status"] = "completed"
                 logger.info(f"Operation completed: {operation}")
                 return {"status": "completed"}
         else:
             return {"status": "processing"}
-
+    
     except HTTPException:
         raise
     except Exception as e:
@@ -516,51 +496,48 @@ async def get_video(operation: str):
     """Retrieve the generated video."""
     if not operation:
         raise HTTPException(status_code=400, detail="Operation ID required")
-
+    
     if not GEMINI_API_KEY:
         logger.error("GEMINI_API_KEY not configured")
         raise HTTPException(status_code=500, detail="Server configuration error")
-
+    
     try:
-        if operation not in operations_store:
-            raise HTTPException(status_code=404, detail="Operation not found")
-
-        stored = operations_store[operation]
-        op = stored["operation"]
-
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        op = client.operations.get(operation)
+        
         if not op.done:
             raise HTTPException(status_code=400, detail="Video generation not complete")
-
+        
         if op.error:
             raise HTTPException(status_code=400, detail="Video generation failed")
-
+        
         # Get the video from the operation response
         if not op.response or not op.response.generated_videos:
             raise HTTPException(status_code=500, detail="No video in response")
-
+        
         video = op.response.generated_videos[0]
-
+        
         # Download the video from the provided URL
         logger.info(f"Downloading video for operation: {operation}")
-
+        
         video_response = requests.get(
             video.video.uri,
             timeout=VIDEO_DOWNLOAD_TIMEOUT_SECONDS,
             stream=True
         )
-
+        
         if video_response.status_code != 200:
             logger.error(f"Failed to download video: {video_response.status_code}")
             raise HTTPException(status_code=500, detail="Failed to download video")
-
+        
         logger.info(f"Video downloaded successfully: {operation}")
-
+        
         return StreamingResponse(
             video_response.iter_content(chunk_size=8192),
             media_type="video/mp4",
             headers={"Content-Disposition": "inline; filename=video.mp4"}
         )
-
+    
     except HTTPException:
         raise
     except Exception as e:
