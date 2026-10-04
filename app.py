@@ -8,6 +8,7 @@ import google.genai as genai
 from google.genai import types
 from dotenv import load_dotenv
 import requests
+import json
 
 load_dotenv()
 
@@ -456,31 +457,57 @@ async def generate_video(request: GenerateRequest):
         )
 
 
+def get_operation_from_google(operation_name: str):
+    """Get operation status from Google API using REST."""
+    try:
+        headers = {
+            "Authorization": f"Bearer {GEMINI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        # Use Google's REST API to get operation status
+        url = f"https://generativelanguage.googleapis.com/v1beta/{operation_name}?key={GEMINI_API_KEY}"
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.error(f"Google API error: {response.status_code} - {response.text}")
+            return None
+    
+    except Exception as e:
+        logger.error(f"Failed to get operation from Google: {str(e)}")
+        return None
+
+
 @app.get("/status")
 async def check_status(operation: str):
     """Check the status of a video generation operation."""
     if not operation:
         raise HTTPException(status_code=400, detail="Operation ID required")
-
+    
     if not GEMINI_API_KEY:
         logger.error("GEMINI_API_KEY not configured")
         raise HTTPException(status_code=500, detail="Server configuration error")
-
+    
     try:
         logger.info(f"Checking status for operation: {operation}")
-        client = genai.Client(api_key=GEMINI_API_KEY)
-
-        # Try to get the operation status
-        try:
-            op = client.operations.get(operation)
-        except Exception as get_error:
-            logger.error(f"Failed to get operation: {str(get_error)}")
-            # Return processing status instead of failing
+        
+        # Get operation status from Google API
+        op_data = get_operation_from_google(operation)
+        
+        if not op_data:
+            logger.warning(f"Could not retrieve operation: {operation}")
             return {"status": "processing"}
-
-        if op.done:
-            if op.error:
-                error_msg = op.error.message if hasattr(op.error, 'message') else str(op.error)
+        
+        # Check if operation is complete
+        is_done = op_data.get("done", False)
+        
+        if is_done:
+            # Check if there was an error
+            if "error" in op_data:
+                error_msg = op_data.get("error", {}).get("message", "Unknown error")
                 logger.error(f"Operation failed: {error_msg}")
                 return {
                     "status": "failed",
@@ -492,12 +519,9 @@ async def check_status(operation: str):
         else:
             logger.info(f"Operation still processing: {operation}")
             return {"status": "processing"}
-
-    except HTTPException:
-        raise
+    
     except Exception as e:
         logger.error(f"Status check error: {str(e)}")
-        # Return processing instead of 500 error to avoid breaking polling
         return {"status": "processing"}
 
 
@@ -512,26 +536,34 @@ async def get_video(operation: str):
         raise HTTPException(status_code=500, detail="Server configuration error")
     
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        op = client.operations.get(operation)
+        logger.info(f"Retrieving video for operation: {operation}")
         
-        if not op.done:
+        # Get operation from Google API
+        op_data = get_operation_from_google(operation)
+        
+        if not op_data or not op_data.get("done"):
             raise HTTPException(status_code=400, detail="Video generation not complete")
         
-        if op.error:
+        if "error" in op_data:
             raise HTTPException(status_code=400, detail="Video generation failed")
         
-        # Get the video from the operation response
-        if not op.response or not op.response.generated_videos:
+        # Get the video URL from the response
+        response_data = op_data.get("response", {})
+        generated_videos = response_data.get("generatedVideos", [])
+        
+        if not generated_videos:
             raise HTTPException(status_code=500, detail="No video in response")
         
-        video = op.response.generated_videos[0]
+        video_uri = generated_videos[0].get("video", {}).get("uri")
+        
+        if not video_uri:
+            raise HTTPException(status_code=500, detail="No video URI found")
         
         # Download the video from the provided URL
-        logger.info(f"Downloading video for operation: {operation}")
+        logger.info(f"Downloading video from: {video_uri[:50]}...")
         
         video_response = requests.get(
-            video.video.uri,
+            video_uri,
             timeout=VIDEO_DOWNLOAD_TIMEOUT_SECONDS,
             stream=True
         )
