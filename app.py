@@ -6,6 +6,8 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 import google.genai as genai
 from google.genai import types
+from google.auth import default
+from google.auth.transport.requests import Request
 from dotenv import load_dotenv
 import requests
 import json
@@ -47,9 +49,37 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 
 if not GEMINI_API_KEY:
     logger.error("GEMINI_API_KEY not found in environment variables")
+
+# Initialize OAuth2 token for API calls
+def get_auth_token():
+    """Get OAuth2 access token from service account or default credentials."""
+    try:
+        if SERVICE_ACCOUNT_JSON:
+            # Use service account JSON
+            import json
+            from google.oauth2 import service_account
+
+            creds_dict = json.loads(SERVICE_ACCOUNT_JSON)
+            credentials = service_account.Credentials.from_service_account_info(
+                creds_dict,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            credentials.refresh(Request())
+            return credentials.token
+        else:
+            # Fall back to default credentials
+            credentials, _ = default()
+            if credentials and hasattr(credentials, 'refresh'):
+                credentials.refresh(Request())
+                return credentials.token
+            return None
+    except Exception as e:
+        logger.error(f"Failed to get auth token: {str(e)}")
+        return None
 
 app = FastAPI()
 
@@ -458,24 +488,30 @@ async def generate_video(request: GenerateRequest):
 
 
 def get_operation_from_google(operation_name: str):
-    """Get operation status from Google API using REST."""
+    """Get operation status from Google API using OAuth2."""
     try:
+        # Get OAuth2 token
+        token = get_auth_token()
+        if not token:
+            logger.error("Could not get OAuth2 token")
+            return None
+
         headers = {
-            "Authorization": f"Bearer {GEMINI_API_KEY}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
-        
-        # Use Google's REST API to get operation status
-        url = f"https://generativelanguage.googleapis.com/v1beta/{operation_name}?key={GEMINI_API_KEY}"
-        
+
+        # Use Google's REST API to get operation status (without API key)
+        url = f"https://generativelanguage.googleapis.com/v1beta/{operation_name}"
+
         response = requests.get(url, headers=headers, timeout=10)
-        
+
         if response.status_code == 200:
             return response.json()
         else:
             logger.error(f"Google API error: {response.status_code} - {response.text}")
             return None
-    
+
     except Exception as e:
         logger.error(f"Failed to get operation from Google: {str(e)}")
         return None
